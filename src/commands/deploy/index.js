@@ -1,11 +1,9 @@
 
 const spawnCommand = require('../../helpers/spawnCommand');
-const execCommand = require('../../helpers/execCommand')
 const readJsonFile = require("../../helpers/readJsonFile");
 const replaceTfVars = require("../../helpers/replaceTfVars");
 const replaceTfVarsInString = require('../../helpers/replaceTfVarsInString');
 const generateTfArgsArrayOfVariables = require('../../helpers/generateTfArgsArrayOfVariables');
-
 
 const runCommands = async (commands = []) => {
 	const localCommands = [...commands];
@@ -100,15 +98,20 @@ const handler = async ({ env = 'dev', feature = 'master' } = {}) => {
     );
   }
 
-  const execCommandsString = deployChain.reduce((allCommands, command, index) => {
-    if(index === 0) {
-      return replaceTfVarsInString(command, tfOutputs);
-    } else {
-      return `${allCommands} && ${replaceTfVarsInString(command, tfOutputs)}`
-    }
-  }, '');
+  const deployCommands = deployChain.reduce((commands, command) => {
+    const [cmd, ...args] = command.split(' ');
 
-  execCommand(execCommandsString);
+    return [
+      ...commands,
+      {
+        cmd,
+        args: args.map(arg => replaceTfVarsInString(arg, tfOutputs)),
+        shell: true
+      }
+    ];
+  }, []);
+
+  await runCommands(deployCommands);
 };
 
 
