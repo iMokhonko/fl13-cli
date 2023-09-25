@@ -1,3 +1,6 @@
+const fs = require('fs').promises;
+
+const getEnvServices = require('../aws/getServices');
 
 const spawnCommand = require('../../helpers/spawnCommand');
 const readJsonFile = require("../../helpers/readJsonFile");
@@ -98,6 +101,9 @@ const handler = async ({ env = 'dev', feature = 'master' } = {}) => {
     );
   }
 
+  const services = await getEnvServices(env, feature);
+  await fs.writeFile('env.json', JSON.stringify(services, null, 2));
+
   const deployCommands = deployChain.reduce((commands, command) => {
     const [cmd, ...args] = command.split(' ');
 
@@ -113,7 +119,6 @@ const handler = async ({ env = 'dev', feature = 'master' } = {}) => {
 
   await runCommands(deployCommands);
 };
-
 
 module.exports = {
   command: 'deploy',
