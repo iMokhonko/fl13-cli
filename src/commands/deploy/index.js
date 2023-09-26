@@ -1,12 +1,13 @@
 const fs = require('fs').promises;
 
-const getEnvServices = require('../aws/getServices');
+const getEnvServices = require('../../aws/getServices');
 
 const spawnCommand = require('../../helpers/spawnCommand');
 const readJsonFile = require("../../helpers/readJsonFile");
 const replaceTfVars = require("../../helpers/replaceTfVars");
 const replaceTfVarsInString = require('../../helpers/replaceTfVarsInString');
 const generateTfArgsArrayOfVariables = require('../../helpers/generateTfArgsArrayOfVariables');
+const getTfOutputs = require('../../terraform/getTfOutputs');
 
 const runCommands = async (commands = []) => {
 	const localCommands = [...commands];
@@ -18,107 +19,121 @@ const runCommands = async (commands = []) => {
 	}
 };
 
-const handler = async ({ env = 'dev', feature = 'master' } = {}) => {  
+const handler = async ({ env = 'dev', feature = 'master', only = '' } = {}) => { 
   const {
     terraformResources = [],
     deployChain = []
   } = readJsonFile(`./terraform/${env}/service.json`) ?? {};
 
-  // object for storing outputs from terraform
-  const tfOutputs = {};
+  if(only !== '' && !['infrastructure', 'deploy'].includes(only)) {
+    console.error('Allowed values for --only are', ['infrastructure', 'deploy']);
+    return;
+  }
 
-  while(terraformResources.length) {
-    const {
-      folderName, // tf directory path
-      outputName,
-      variables = {},
-      global
-    } = terraformResources.shift();
+  if(only !== '') {
+    console.log(`Running only ${only}`)
+  }
 
-    // terraform resources directory
-    const cwd = `./terraform/${env}/${folderName}`
-
-    const allVariables = { 
-      ...variables, 
-      env,
-      ...(!global && { feature }), 
-    };
-
-    const replacedVars = replaceTfVars(allVariables, tfOutputs);
-    const spawnCommandString = generateTfArgsArrayOfVariables(replacedVars);
-
-    const tfWorkspaceName = feature === 'master' || global ? 'default' : feature;
-
-    await runCommands([
-      { 
-        cmd: 'terraform',
-         args: ['init', '-reconfigure'], 
-         cwd
-      },
-      { 
-        cmd: 'terraform', 
-        args: ['workspace', 'select', '-or-create', tfWorkspaceName], 
-        cwd 
-      },
-      {
-        cmd: 'terraform',
-        args: [
-          'apply', 
-          ...spawnCommandString,
-          '--auto-approve'
-        ],
-        cwd
-      },
-      { 
-        cmd: 'terraform', 
-        args: ['output', '-json', '>', 'output.json'], 
-        cwd, 
-        shell: true 
-      }
-    ]);
-
-    const outputs = readJsonFile(`${cwd}/output.json`) ?? {};
-    
-    tfOutputs[outputName] = Object.entries(outputs).reduce((memo, [outputName, { value }]) => ({
-      ...memo,
-      [outputName]: value
-    }), {});
-
-    await runCommands(
-      [
-        {
-          cmd: 'rm',
-          args: ['output.json'],
-          cwd, 
-          shell: true
+  const tfOutputs = only === 'deploy' ? await getTfOutputs(terraformResources, { env, feature }) : {};
+  
+  if(only === '' || only === 'infrastructure') {
+    while(terraformResources.length) {
+      const {
+        folderName, // tf directory path
+        outputName,
+        variables = {},
+        global
+      } = terraformResources.shift();
+  
+      // terraform resources directory
+      const cwd = `./terraform/${env}/${folderName}`
+  
+      const allVariables = { 
+        ...variables, 
+        env,
+        ...(!global && { feature }), 
+      };
+  
+      const replacedVars = replaceTfVars(allVariables, tfOutputs);
+      const spawnCommandString = generateTfArgsArrayOfVariables(replacedVars);
+  
+      const tfWorkspaceName = feature === 'master' || global ? 'default' : feature;
+  
+      await runCommands([
+        { 
+          cmd: 'terraform',
+           args: ['init', '-reconfigure'], 
+           cwd
         },
         { 
           cmd: 'terraform', 
-          args: ['workspace', 'select', '-or-create', 'default'], 
+          args: ['workspace', 'select', '-or-create', tfWorkspaceName], 
           cwd 
         },
-      ]
-    );
+        {
+          cmd: 'terraform',
+          args: [
+            'apply', 
+            ...spawnCommandString,
+            '--auto-approve'
+          ],
+          cwd
+        },
+        { 
+          cmd: 'terraform', 
+          args: ['output', '-json', '>', 'output.json'], 
+          cwd, 
+          shell: true 
+        }
+      ]);
+  
+      const outputs = readJsonFile(`${cwd}/output.json`) ?? {};
+      
+      tfOutputs[outputName] = Object.entries(outputs).reduce((memo, [outputName, { value }]) => ({
+        ...memo,
+        [outputName]: value
+      }), {});
+  
+      await runCommands(
+        [
+          {
+            cmd: 'rm',
+            args: ['output.json'],
+            cwd, 
+            shell: true
+          },
+          { 
+            cmd: 'terraform', 
+            args: ['workspace', 'select', '-or-create', 'default'], 
+            cwd 
+          },
+        ]
+      );
+    }
   }
 
+  // refresh env.json
   const services = await getEnvServices(env, feature);
   await fs.writeFile('env.json', JSON.stringify(services, null, 2));
 
-  const deployCommands = deployChain.reduce((commands, command) => {
-    const [cmd, ...args] = command.split(' ');
-
-    return [
-      ...commands,
-      {
-        cmd,
-        args: args.map(arg => replaceTfVarsInString(arg, tfOutputs)),
-        shell: true
-      }
-    ];
-  }, []);
-
-  await runCommands(deployCommands);
+  if(only === '' || only === 'deploy') {
+    const deployCommands = deployChain.reduce((commands, command) => {
+      const [cmd, ...args] = command.split(' ');
+  
+      return [
+        ...commands,
+        {
+          cmd,
+          args: args.map(arg => replaceTfVarsInString(arg, tfOutputs)),
+          shell: true
+        }
+      ];
+    }, []);
+  
+    await runCommands(deployCommands);
+  }
 };
+
 
 module.exports = {
   command: 'deploy',
@@ -135,6 +150,12 @@ module.exports = {
       alias: 'f',
       type: 'string',
       default: 'master'
+    },
+    only: {
+      description: 'Run only infrastructure setup or deploy chain scripts',
+      alias: 'o',
+      type: 'string',
+      default: ''
     }
   },
   handler

@@ -6,8 +6,8 @@ settings:
 
 dependencies:
   aws-sdk:
-    specifier: ^2.1463.0
-    version: 2.1463.0
+    specifier: ^2.1464.0
+    version: 2.1464.0
   lodash:
     specifier: ^4.17.21
     version: 4.17.21
@@ -34,8 +34,8 @@ packages:
     engines: {node: '>= 0.4'}
     dev: false
 
-  /aws-sdk@2.1463.0:
-    resolution: {integrity: sha512-NGJLovoHEX6uN3u9iHx0KWg9AigZfSz9YekLQssqGk5vHAEzW7TlCgRsqTu6vhGI5FzlYWapSvUpJUriQUCwMA==}
+  /aws-sdk@2.1464.0:
+    resolution: {integrity: sha512-GsYibfJmyI6UbZaTkMkibtfxvcG2hyqac+vfrDuJwqQ6i4b//Q2f3tYubwn950bO6F87C/um96SSHc9UMlfbfw==}
     engines: {node: '>= 10.0.0'}
     dependencies:
       buffer: 4.9.2

@@ -1,77 +1,8 @@
-const spawnCommand = require('../../helpers/spawnCommand');
+const getTfOutputs = require('../../terraform/getTfOutputs');
+const runCommands = require('../../helpers/runCommands');
 const readJsonFile = require("../../helpers/readJsonFile");
 const replaceTfVars = require("../../helpers/replaceTfVars");
 const generateTfArgsArrayOfVariables = require('../../helpers/generateTfArgsArrayOfVariables');
-
-const runCommands = async (commands = []) => {
-	const localCommands = [...commands];
-
-	while(localCommands.length) {
-		const { cmd, args, cwd, shell } = localCommands.shift();
-
-		await spawnCommand({ cmd, args, cwd, shell });
-	}
-};
-
-const getTfOutputs = async (resources = [], { env = 'dev', feature = 'master' } = {}) => {
-  resources = [...resources];
-
-  const tfOutputs = {};
-
-  while(resources.length) {
-    const {
-      folderName,
-      outputName,
-      global
-    } = resources.shift();
-
-    const cwd = `./terraform/${env}/${folderName}`;
-
-    await runCommands([
-      { 
-        cmd: 'terraform',
-          args: ['init', '-reconfigure'], 
-          cwd
-      },
-      { 
-        cmd: 'terraform', 
-        args: ['workspace', 'select', '-or-create', feature === 'master' || global ? 'default' : feature], 
-        cwd 
-      },
-      { 
-        cmd: 'terraform', 
-        args: ['output', '-json', '>', 'output.json'], 
-        cwd, 
-        shell: true 
-      }
-    ]);
-
-    const outputs = readJsonFile(`${cwd}/output.json`) ?? {};
-
-    tfOutputs[outputName] = Object.entries(outputs).reduce((memo, [outputName, { value }]) => ({
-      ...memo,
-      [outputName]: value
-    }), {});
-
-    await runCommands(
-      [
-        {
-          cmd: 'rm',
-          args: ['output.json'],
-          cwd, 
-          shell: true
-        },
-        { 
-          cmd: 'terraform', 
-          args: ['workspace', 'select', '-or-create', 'default'], 
-          cwd 
-        },
-      ]
-    );
-  }
-
-  return tfOutputs;
-}
 
 const handler = async ({ env = 'dev', feature = 'master' } = {}) => {  
   const {
