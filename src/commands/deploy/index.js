@@ -1,13 +1,11 @@
 const fs = require('fs').promises;
 
-const getEnvServices = require('../../aws/getServices');
-
 const spawnCommand = require('../../helpers/spawnCommand');
 const readJsonFile = require("../../helpers/readJsonFile");
-const replaceTfVars = require("../../helpers/replaceTfVars");
 const replaceTfVarsInString = require('../../helpers/replaceTfVarsInString');
-const generateTfArgsArrayOfVariables = require('../../helpers/generateTfArgsArrayOfVariables');
 const getTfOutputs = require('../../terraform/getTfOutputs');
+
+const { handler: refreshConfig } = require('../config/refresh');
 
 const runCommands = async (commands = []) => {
 	const localCommands = [...commands];
@@ -21,6 +19,7 @@ const runCommands = async (commands = []) => {
 
 const handler = async ({ env = 'dev', feature = 'master', only = '' } = {}) => { 
   const {
+    serviceName = '',
     terraformResources = [],
     deployChain = []
   } = readJsonFile(`./terraform/${env}/service.json`) ?? {};
@@ -35,7 +34,7 @@ const handler = async ({ env = 'dev', feature = 'master', only = '' } = {}) => {
   }
 
   const tfOutputs = only === 'deploy' ? await getTfOutputs(terraformResources, { env, feature }) : {};
-  
+
   if(only === '' || only === 'infrastructure') {
     while(terraformResources.length) {
       const {
@@ -53,10 +52,7 @@ const handler = async ({ env = 'dev', feature = 'master', only = '' } = {}) => {
         env,
         ...(!global && { feature }), 
       };
-  
-      const replacedVars = replaceTfVars(allVariables, tfOutputs);
-      const spawnCommandString = generateTfArgsArrayOfVariables(replacedVars);
-  
+
       const tfWorkspaceName = feature === 'master' || global ? 'default' : feature;
   
       await runCommands([
@@ -74,7 +70,15 @@ const handler = async ({ env = 'dev', feature = 'master', only = '' } = {}) => {
           cmd: 'terraform',
           args: [
             'apply', 
-            ...spawnCommandString,
+
+            '--var', `env=${env}`, // pass env variable
+
+            '--var', `feature=${feature}`, // pass feature variable (for global resources always will be master)
+
+            '--var', `context=${JSON.stringify(tfOutputs)}`, // pass context (context is outputs object from previous steps)
+
+            '--var', `tags={ "service": "${serviceName}", "env": "${env}", "feature": "${feature}" }`, // pass tags for this service
+
             '--auto-approve'
           ],
           cwd
@@ -112,9 +116,7 @@ const handler = async ({ env = 'dev', feature = 'master', only = '' } = {}) => {
     }
   }
 
-  // refresh env.json
-  const services = await getEnvServices(env, feature);
-  await fs.writeFile('env.json', JSON.stringify(services, null, 2));
+  await refreshConfig({ env, feature, tfOutputs });
 
   if(only === '' || only === 'deploy') {
     const deployCommands = deployChain.reduce((commands, command) => {

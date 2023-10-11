@@ -2,6 +2,13 @@ const runCommands = require('../helpers/runCommands');
 const readJsonFile = require("../helpers/readJsonFile");
 
 module.exports = async (resources = [], { env = 'dev', feature = 'master' } = {}) => {
+  try {
+    const infrastructureData = readJsonFile(`infrastructure.json`) ?? null;
+
+    if(infrastructureData !== null)
+      return infrastructureData;
+  } catch(e) {}
+
   resources = [...resources];
 
   const tfOutputs = {};

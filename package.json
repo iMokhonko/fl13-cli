@@ -1,5 +1,5 @@
 {
-  "name": "im-cli",
+  "name": "floor13",
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
@@ -7,7 +7,7 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "bin": {
-    "im-cli": "./src/index.js"
+    "fl13": "./src/index.js"
   },
   "keywords": [],
   "author": "",
