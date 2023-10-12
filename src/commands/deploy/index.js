@@ -1,8 +1,7 @@
-const fs = require('fs').promises;
+const AWS = require('aws-sdk');
 
 const spawnCommand = require('../../helpers/spawnCommand');
 const readJsonFile = require("../../helpers/readJsonFile");
-const replaceTfVarsInString = require('../../helpers/replaceTfVarsInString');
 const getTfOutputs = require('../../terraform/getTfOutputs');
 
 const { handler: refreshConfig } = require('../config/refresh');
@@ -20,9 +19,10 @@ const runCommands = async (commands = []) => {
 const handler = async ({ env = 'dev', feature = 'master', only = '' } = {}) => { 
   const {
     serviceName = '',
+    config = {},
     terraformResources = [],
-    deployChain = []
-  } = readJsonFile(`./terraform/${env}/service.json`) ?? {};
+    deploy = () => {}
+  } = require(`${process.cwd()}/terraform/${env}/index.js`);
 
   if(only !== '' && !['infrastructure', 'deploy'].includes(only)) {
     console.error('Allowed values for --only are', ['infrastructure', 'deploy']);
@@ -40,18 +40,11 @@ const handler = async ({ env = 'dev', feature = 'master', only = '' } = {}) => {
       const {
         folderName, // tf directory path
         outputName,
-        variables = {},
         global
       } = terraformResources.shift();
   
       // terraform resources directory
       const cwd = `./terraform/${env}/${folderName}`
-  
-      const allVariables = { 
-        ...variables, 
-        env,
-        ...(!global && { feature }), 
-      };
 
       const tfWorkspaceName = feature === 'master' || global ? 'default' : feature;
   
@@ -77,7 +70,7 @@ const handler = async ({ env = 'dev', feature = 'master', only = '' } = {}) => {
 
             '--var', `context=${JSON.stringify(tfOutputs)}`, // pass context (context is outputs object from previous steps)
 
-            '--var', `tags={ "service": "${serviceName}", "env": "${env}", "feature": "${feature}" }`, // pass tags for this service
+            '--var', `tags={ "service": "${serviceName}", "env": "${env}", "feature": "${feature}", "createdBy": "terraform" }`, // pass tags for this service
 
             '--auto-approve'
           ],
@@ -119,20 +112,13 @@ const handler = async ({ env = 'dev', feature = 'master', only = '' } = {}) => {
   await refreshConfig({ env, feature, tfOutputs });
 
   if(only === '' || only === 'deploy') {
-    const deployCommands = deployChain.reduce((commands, command) => {
-      const [cmd, ...args] = command.split(' ');
-  
-      return [
-        ...commands,
-        {
-          cmd,
-          args: args.map(arg => replaceTfVarsInString(arg, tfOutputs)),
-          shell: true
-        }
-      ];
-    }, []);
-  
-    await runCommands(deployCommands);
+    await deploy({
+      env,
+      feature,
+      config,
+      AWS,
+      infrastructure: tfOutputs
+    });
   }
 };
 
