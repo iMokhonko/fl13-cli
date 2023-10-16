@@ -3,6 +3,7 @@ const AWS = require('aws-sdk');
 const spawnCommand = require('../../helpers/spawnCommand');
 const readJsonFile = require("../../helpers/readJsonFile");
 const getTfOutputs = require('../../terraform/getTfOutputs');
+const createFile = require('../../helpers/createFile');
 
 const { handler: refreshConfig } = require('../config/refresh');
 
@@ -20,6 +21,8 @@ const handler = async ({ env = 'dev', feature = 'master', only = '' } = {}) => {
   const {
     serviceName = '',
     config = {},
+    aws = {},
+    terraformBackend = {},
     terraformResources = [],
     deploy = () => {}
   } = require(`${process.cwd()}/terraform/${env}/index.js`);
@@ -48,6 +51,28 @@ const handler = async ({ env = 'dev', feature = 'master', only = '' } = {}) => {
 
       const tfWorkspaceName = feature === 'master' || global ? 'default' : feature;
   
+      // create backend file based on configuration
+      await createFile(`${cwd}/backend.tf`, `terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+  
+  backend "s3" {
+    bucket = "${terraformBackend.bucket}"
+    key    = "${terraformBackend.serviceName}/${env}/${folderName}.tfstate"
+    region = "${terraformBackend.region}"
+  }
+}
+
+provider "aws" {
+  region = "${aws.region}"
+  profile = "${aws.profile}"
+}
+      `);
+
       await runCommands([
         { 
           cmd: 'terraform',
@@ -69,6 +94,8 @@ const handler = async ({ env = 'dev', feature = 'master', only = '' } = {}) => {
             '--var', `feature=${feature}`, // pass feature variable (for global resources always will be master)
 
             '--var', `context=${JSON.stringify(tfOutputs)}`, // pass context (context is outputs object from previous steps)
+
+            '--var', `config=${JSON.stringify(config)}`, // pass config as variable
 
             '--var', `tags={ "service": "${serviceName}", "env": "${env}", "feature": "${feature}", "createdBy": "terraform" }`, // pass tags for this service
 
