@@ -25,7 +25,7 @@ const handler = async ({ env = 'dev', feature = 'master', only = '' } = {}) => {
     terraformBackend = {},
     terraformResources = [],
     deploy = () => {}
-  } = require(`${process.cwd()}/terraform/${env}/index.js`);
+  } = require(`${process.cwd()}/terraform/index.js`);
 
   if(only !== '' && !['infrastructure', 'deploy'].includes(only)) {
     console.error('Allowed values for --only are', ['infrastructure', 'deploy']);
@@ -47,7 +47,7 @@ const handler = async ({ env = 'dev', feature = 'master', only = '' } = {}) => {
       } = terraformResources.shift();
   
       // terraform resources directory
-      const cwd = `./terraform/${env}/${folderName}`
+      const cwd = `./terraform/${folderName}`
 
       const tfWorkspaceName = feature === 'master' || global ? 'default' : feature;
   

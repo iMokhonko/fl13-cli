@@ -21,7 +21,7 @@ module.exports = async (resources = [], { env = 'dev', feature = 'master' } = {}
       global
     } = resources.shift();
 
-    const cwd = `./terraform/${env}/${folderName}`;
+    const cwd = `./terraform/${folderName}`;
 
     await runCommands([
       { 

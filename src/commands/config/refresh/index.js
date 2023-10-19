@@ -14,7 +14,7 @@ const handler = async ({ env = 'dev', feature = 'master', tfOutputs = null } = {
   } else {
     const {
       terraformResources = []
-    } = require(`${process.cwd()}/terraform/${env}/index.js`);
+    } = require(`${process.cwd()}/terraform/index.js`);
 
     infrastructure = await getTfOutputs(terraformResources, { env, feature })
   }
