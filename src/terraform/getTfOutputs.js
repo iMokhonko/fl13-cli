@@ -36,13 +36,13 @@ module.exports = async (resources = [], { env = 'dev', feature = 'master' } = {}
       },
       { 
         cmd: 'terraform', 
-        args: ['output', '-json', '>', 'output.json'], 
+        args: ['output', '-json', '>', 'output.cligenerated.json'], 
         cwd, 
         shell: true 
       }
     ]);
 
-    const outputs = readJsonFile(`${cwd}/output.json`) ?? {};
+    const outputs = readJsonFile(`${cwd}/output.cligenerated.json`) ?? {};
 
     tfOutputs[outputName] = Object.entries(outputs).reduce((memo, [outputName, { value }]) => ({
       ...memo,
@@ -53,7 +53,7 @@ module.exports = async (resources = [], { env = 'dev', feature = 'master' } = {}
       [
         {
           cmd: 'rm',
-          args: ['output.json'],
+          args: ['output.cligenerated.json'],
           cwd, 
           shell: true
         },

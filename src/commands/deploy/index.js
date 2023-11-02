@@ -1,4 +1,5 @@
 const AWS = require('aws-sdk');
+const fs = require('fs').promises;
 
 const spawnCommand = require('../../helpers/spawnCommand');
 const readJsonFile = require("../../helpers/readJsonFile");
@@ -16,6 +17,38 @@ const runCommands = async (commands = []) => {
 		await spawnCommand({ cmd, args, cwd, shell });
 	}
 };
+
+// create backend file based on configuration
+const createBackendFile = async ({ aws, terraformBackend, cwd, folderName, env }) => {
+  return createFile(`${cwd}/backend.cligenerated.tf`, `terraform {
+    required_providers {
+      aws = {
+        source  = "hashicorp/aws"
+        version = "~> 5.0"
+      }
+    }
+    
+    backend "s3" {
+      bucket = "${terraformBackend.bucket}"
+      key    = "${terraformBackend.serviceName}/${env}/${folderName}.tfstate"
+      region = "${terraformBackend.region}"
+    }
+  }
+  
+  provider "aws" {
+    region = "${aws.region}"
+    profile = "${aws.profile}"
+  }
+        `);
+};
+
+const deleteFile = async (path) => {
+  try {
+      return fs.unlink(path);
+  } catch (err) {
+      console.error(err);
+  }
+}
 
 const handler = async ({ env = 'dev', feature = 'master', only = '' } = {}) => { 
   const {
@@ -35,6 +68,17 @@ const handler = async ({ env = 'dev', feature = 'master', only = '' } = {}) => {
   if(only !== '') {
     console.log(`Running only ${only}`)
   }
+  
+  // create backend files for each tf folder
+  await Promise.all(
+    terraformResources.map(({ folderName }) => createBackendFile({
+      aws,
+      terraformBackend,
+      folderName,
+      cwd: `./terraform/${folderName}`,
+      env
+    }))
+  );
 
   const tfOutputs = only === 'deploy' ? await getTfOutputs(terraformResources, { env, feature }) : {};
 
@@ -50,28 +94,6 @@ const handler = async ({ env = 'dev', feature = 'master', only = '' } = {}) => {
       const cwd = `./terraform/${folderName}`
 
       const tfWorkspaceName = feature === 'master' || global ? 'default' : feature;
-  
-      // create backend file based on configuration
-      await createFile(`${cwd}/backend.tf`, `terraform {
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.0"
-    }
-  }
-  
-  backend "s3" {
-    bucket = "${terraformBackend.bucket}"
-    key    = "${terraformBackend.serviceName}/${env}/${folderName}.tfstate"
-    region = "${terraformBackend.region}"
-  }
-}
-
-provider "aws" {
-  region = "${aws.region}"
-  profile = "${aws.profile}"
-}
-      `);
 
       await runCommands([
         { 
@@ -138,6 +160,9 @@ provider "aws" {
 
   await refreshConfig({ env, feature, tfOutputs });
 
+  // delete backend files
+  // await Promise.all(terraformResources.map(({ folderName }) => deleteFile(`./terraform/${folderName}/backend.tf`)));
+
   if(only === '' || only === 'deploy') {
     await deploy({
       env,
@@ -148,7 +173,6 @@ provider "aws" {
     });
   }
 };
-
 
 module.exports = {
   command: 'deploy',

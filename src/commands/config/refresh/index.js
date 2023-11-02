@@ -8,20 +8,29 @@ const handler = async ({ env = 'dev', feature = 'master', tfOutputs = null } = {
 
   let infrastructure = {};
 
+  const {
+    terraformResources = [],
+    config = [],
+  } = require(`${process.cwd()}/terraform/index.js`);
+
   // check if tfOutputs provided
   if(tfOutputs) {
     infrastructure = tfOutputs;
   } else {
-    const {
-      terraformResources = []
-    } = require(`${process.cwd()}/terraform/index.js`);
-
     infrastructure = await getTfOutputs(terraformResources, { env, feature })
   }
 
   await Promise.all([
-    fs.writeFile('env.json', JSON.stringify(services, null, 2)),
-    infrastructure && fs.writeFile('infrastructure.json', JSON.stringify(infrastructure, null, 2)),
+    fs.writeFile('env.cligenerated.json', JSON.stringify(services, null, 2)),
+    infrastructure && fs.writeFile('infrastructure.cligenerated.json', JSON.stringify({
+      __meta: {
+        config: {
+          feature,
+          ...config,
+        }
+      },
+      ...infrastructure
+    }, null, 2)),
   ]);
 
   console.log('Config refreshed');
