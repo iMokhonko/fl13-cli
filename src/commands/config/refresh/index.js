@@ -25,8 +25,9 @@ const handler = async ({ env = 'dev', feature = 'master', tfOutputs = null } = {
     infrastructure && fs.writeFile('infrastructure.cligenerated.json', JSON.stringify({
       __meta: {
         config: {
-          feature,
           ...config,
+          feature,
+          env
         }
       },
       ...infrastructure
