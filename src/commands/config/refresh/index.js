@@ -21,7 +21,16 @@ const handler = async ({ env = 'dev', feature = 'master', tfOutputs = null } = {
   }
 
   await Promise.all([
-    fs.writeFile('env.cligenerated.json', JSON.stringify(services, null, 2)),
+    fs.writeFile('env.cligenerated.json', JSON.stringify({
+      __meta: {
+        config: {
+          ...config,
+          feature,
+          env
+        }
+      },
+      ...services,
+    }, null, 2)),
     infrastructure && fs.writeFile('infrastructure.cligenerated.json', JSON.stringify({
       __meta: {
         config: {
