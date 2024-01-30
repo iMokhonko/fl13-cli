@@ -1,70 +1,152 @@
 const runCommands = require('../helpers/runCommands');
 const readJsonFile = require("../helpers/readJsonFile");
+const createFile = require('../helpers/createFile');
 
-module.exports = async (resources = [], { env = 'dev', feature = 'master' } = {}) => {
-  // TODO investigate this approach
-  // try {
-  //   const infrastructureData = readJsonFile(`infrastructure.json`) ?? null;
+// create backend file based on configuration
+const createBackendFile = async ({ awsConfiguration, terraformBackendConfiguration, cwd, folderName, env }) => {
+  return createFile(`${cwd}/backend.cligenerated.tf`, `terraform {
+    required_providers {
+      aws = {
+        source  = "hashicorp/aws"
+        version = "~> 5.0"
+      }
+    }
+    
+    backend "s3" {
+      bucket = "${terraformBackendConfiguration.bucket}"
+      key    = "${terraformBackendConfiguration.serviceName}/${env}/${folderName}.tfstate"
+      region = "${terraformBackendConfiguration.region}"
+    }
+  }
+  
+  provider "aws" {
+    region = "${awsConfiguration.region}"
+    profile = "${awsConfiguration.profile}"
+  }
+        `);
+};
 
-  //   if(infrastructureData !== null)
-  //     return infrastructureData;
-  // } catch(e) {}
+const normalizeTfOutputs = (tfOutputs) => {
+  return Object.entries(tfOutputs).reduce((memo, [outputName, { value }]) => ({
+    ...memo,
+    [outputName]: value
+  }), {})
+};
 
-  resources = [...resources];
+module.exports = async ({ env = 'dev', feature = 'master' } = {}) => {
+  const {
+    awsConfiguration = {},
+    terraformBackendConfiguration = {},
+  } = require(`${process.cwd()}/deploy/index.js`);
 
-  const tfOutputs = {};
+  // Create terraform backend files for configurations
+  await Promise.all([
+    // create backend file for global resources
+    createBackendFile({
+      awsConfiguration,
+      terraformBackendConfiguration,
+      folderName: 'global-resources',
+      cwd: `${process.cwd()}/deploy/terraform/global-resources`,
+      env
+    }),
 
-  while(resources.length) {
-    const {
-      folderName,
-      outputName,
-      global
-    } = resources.shift();
+    // create backend file for feature resources
+    createBackendFile({
+      awsConfiguration,
+      terraformBackendConfiguration,
+      folderName: 'feature-resources',
+      cwd: `${process.cwd()}/deploy/terraform/feature-resources`,
+      env
+    })
+  ]);
 
-    const cwd = `./terraform/${folderName}`;
+  const globalResourcesCwd = `./deploy/terraform/global-resources`;
+  const featureResourcesCwd = `./deploy/terraform/feature-resources`;
 
-    await runCommands([
+  await Promise.all([
+    runCommands([
       { 
         cmd: 'terraform',
           args: ['init', '-reconfigure'], 
-          cwd
+          cwd: globalResourcesCwd
       },
       { 
         cmd: 'terraform', 
-        args: ['workspace', 'select', '-or-create', feature === 'master' || global ? 'default' : feature], 
-        cwd 
+        args: ['workspace', 'select', 'default'], 
+        cwd: globalResourcesCwd
       },
       { 
         cmd: 'terraform', 
         args: ['output', '-json', '>', 'output.cligenerated.json'], 
-        cwd, 
+        cwd: globalResourcesCwd, 
         shell: true 
       }
-    ]);
+    ]),
 
-    const outputs = readJsonFile(`${cwd}/output.cligenerated.json`) ?? {};
+    runCommands([
+      { 
+        cmd: 'terraform',
+          args: ['init', '-reconfigure'], 
+          cwd: featureResourcesCwd
+      },
+      { 
+        cmd: 'terraform', 
+        args: ['workspace', 'select', feature], 
+        cwd: featureResourcesCwd
+      },
+      { 
+        cmd: 'terraform', 
+        args: ['output', '-json', '>', 'output.cligenerated.json'], 
+        cwd: featureResourcesCwd, 
+        shell: true 
+      }
+    ])
+  ]);
 
-    tfOutputs[outputName] = Object.entries(outputs).reduce((memo, [outputName, { value }]) => ({
-      ...memo,
-      [outputName]: value
-    }), {});
+  const globalResourcesOutputsRawJson = readJsonFile(`${globalResourcesCwd}/output.cligenerated.json`) ?? {};
+  const featureResourcesOutputsRawJson = readJsonFile(`${featureResourcesCwd}/output.cligenerated.json`) ?? {};
 
-    await runCommands(
-      [
-        {
-          cmd: 'rm',
-          args: ['output.cligenerated.json'],
-          cwd, 
-          shell: true
-        },
-        { 
-          cmd: 'terraform', 
-          args: ['workspace', 'select', '-or-create', 'default'], 
-          cwd 
-        },
-      ]
-    );
+  const globalResourcesOutputs = normalizeTfOutputs(globalResourcesOutputsRawJson);
+  const featureResourcesOutputs = normalizeTfOutputs(featureResourcesOutputsRawJson);
+
+  await Promise.all([
+    runCommands([
+      {
+        cmd: 'rm',
+        args: ['output.cligenerated.json'],
+        cwd: globalResourcesCwd, 
+        shell: true
+      },
+      {
+        cmd: 'rm',
+        args: ['backend.cligenerated.tf'],
+        cwd: globalResourcesCwd, 
+        shell: true
+      },
+    ]),
+
+    runCommands([
+      {
+        cmd: 'rm',
+        args: ['output.cligenerated.json'],
+        cwd: featureResourcesCwd, 
+        shell: true
+      },
+      {
+        cmd: 'rm',
+        args: ['backend.cligenerated.tf'],
+        cwd: featureResourcesCwd, 
+        shell: true
+      },
+    ]),
+  ]);
+
+  const tfOutputs = {
+    globalResources: globalResourcesOutputs,
+    featureResources: featureResourcesOutputs,
   }
+
+  console.log('tfOutputs', tfOutputs);
 
   return tfOutputs;
 }

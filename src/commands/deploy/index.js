@@ -3,10 +3,26 @@ const fs = require('fs').promises;
 
 const spawnCommand = require('../../helpers/spawnCommand');
 const readJsonFile = require("../../helpers/readJsonFile");
-const getTfOutputs = require('../../terraform/getTfOutputs');
 const createFile = require('../../helpers/createFile');
 
 const { handler: refreshConfig } = require('../config/refresh');
+
+const isFolderExist = async (path) => {
+  try {
+    await fs.access(path)
+
+    return true;
+  } catch(e) {
+    return false;
+  }
+}
+
+const normalizeTfOutputs = (tfOutputs) => {
+  return Object.entries(tfOutputs).reduce((memo, [outputName, { value }]) => ({
+    ...memo,
+    [outputName]: value
+  }), {})
+};
 
 const runCommands = async (commands = []) => {
 	const localCommands = [...commands];
@@ -19,7 +35,7 @@ const runCommands = async (commands = []) => {
 };
 
 // create backend file based on configuration
-const createBackendFile = async ({ aws, terraformBackend, cwd, folderName, env }) => {
+const createBackendFile = async ({ awsConfiguration, terraformBackendConfiguration, cwd, folderName, env }) => {
   return createFile(`${cwd}/backend.cligenerated.tf`, `terraform {
     required_providers {
       aws = {
@@ -29,149 +45,193 @@ const createBackendFile = async ({ aws, terraformBackend, cwd, folderName, env }
     }
     
     backend "s3" {
-      bucket = "${terraformBackend.bucket}"
-      key    = "${terraformBackend.serviceName}/${env}/${folderName}.tfstate"
-      region = "${terraformBackend.region}"
+      bucket = "${terraformBackendConfiguration.bucket}"
+      key    = "${terraformBackendConfiguration.serviceName}/${env}/${folderName}.tfstate"
+      region = "${terraformBackendConfiguration.region}"
     }
   }
   
   provider "aws" {
-    region = "${aws.region}"
-    profile = "${aws.profile}"
+    region = "${awsConfiguration.region}"
+    profile = "${awsConfiguration.profile}"
   }
         `);
 };
 
-const deleteFile = async (path) => {
-  try {
-      return fs.unlink(path);
-  } catch (err) {
-      console.error(err);
-  }
-}
-
-const handler = async ({ env = 'dev', feature = 'master', only = '' } = {}) => { 
+const handler = async ({ env = 'dev', feature = 'master' } = {}) => { 
   const {
     serviceName = '',
     config = {},
-    aws = {},
-    terraformBackend = {},
-    terraformResources = [],
+    awsConfiguration = {},
+    terraformBackendConfiguration = {},
     deploy = () => {}
-  } = require(`${process.cwd()}/terraform/index.js`);
+  } = require(`${process.cwd()}/deploy/index.js`);
 
-  if(only !== '' && !['infrastructure', 'deploy'].includes(only)) {
-    console.error('Allowed values for --only are', ['infrastructure', 'deploy']);
-    return;
-  }
+  const [
+    isGlobalResourcesFolderExist,
+    isFeatureResourcesFolderExist,
+  ] = await Promise.all([
+    isFolderExist(`${process.cwd()}/deploy/terraform/global-resources`),
+    isFolderExist(`${process.cwd()}/deploy/terraform/feature-resources`)
+  ])
 
-  if(only !== '') {
-    console.log(`Running only ${only}`)
-  }
-  
-  // create backend files for each tf folder
-  await Promise.all(
-    terraformResources.map(({ folderName }) => createBackendFile({
-      aws,
-      terraformBackend,
-      folderName,
-      cwd: `./terraform/${folderName}`,
+  let globalResourcesOutputs = {};
+  let featureResourcesOutputs = {};
+
+  if(isGlobalResourcesFolderExist) {
+    const globalResourcesCwd = `./deploy/terraform/global-resources`;
+
+    await createBackendFile({
+      awsConfiguration,
+      terraformBackendConfiguration,
+      folderName: 'global-resources',
+      cwd: globalResourcesCwd,
       env
-    }))
-  );
+    })
 
-  const tfOutputs = only === 'deploy' ? await getTfOutputs(terraformResources, { env, feature }) : {};
+    await runCommands([
+      { 
+        cmd: 'terraform', 
+        args: ['workspace', 'select', '-or-create', 'default'], // for global resources workspace always 'default' 
+        cwd: globalResourcesCwd
+      },
+      { 
+        cmd: 'terraform',
+          args: ['init', '-reconfigure'], 
+          cwd: globalResourcesCwd
+      },
+      {
+        cmd: 'terraform',
+        args: [
+          'apply', 
+          '--var', `env=${env}`, // pass env variable
+          '--var', `config=${JSON.stringify(config)}`, // pass config as variable
+          '--var', `tags={ "service": "${serviceName}", "env": "${env}", "isGlobalResource": true, "createdBy": "terraform" }`, // pass tags for this service
+          '--auto-approve'
+        ],
+        cwd: globalResourcesCwd
+      },
+      { 
+        cmd: 'terraform', 
+        args: ['output', '-json', '>', 'output.cligenerated.json'], 
+        cwd: globalResourcesCwd, 
+        shell: true 
+      }
+    ]);
 
-  if(only === '' || only === 'infrastructure') {
-    while(terraformResources.length) {
-      const {
-        folderName, // tf directory path
-        outputName,
-        global
-      } = terraformResources.shift();
-  
-      // terraform resources directory
-      const cwd = `./terraform/${folderName}`
+    const globalResourcesOutputsRawJson = readJsonFile(`${globalResourcesCwd}/output.cligenerated.json`) ?? {};
+    globalResourcesOutputs = normalizeTfOutputs(globalResourcesOutputsRawJson);
 
-      const tfWorkspaceName = feature === 'master' || global ? 'default' : feature;
-
-      await runCommands([
-        { 
-          cmd: 'terraform',
-           args: ['init', '-reconfigure'], 
-           cwd
-        },
+    await runCommands(
+      [
         { 
           cmd: 'terraform', 
-          args: ['workspace', 'select', '-or-create', tfWorkspaceName], 
-          cwd 
+          args: ['workspace', 'select', '-or-create', 'default'], 
+          cwd: globalResourcesCwd 
         },
         {
-          cmd: 'terraform',
-          args: [
-            'apply', 
-
-            '--var', `env=${env}`, // pass env variable
-
-            '--var', `feature=${feature}`, // pass feature variable (for global resources always will be master)
-
-            '--var', `context=${JSON.stringify(tfOutputs)}`, // pass context (context is outputs object from previous steps)
-
-            '--var', `config=${JSON.stringify(config)}`, // pass config as variable
-
-            '--var', `tags={ "service": "${serviceName}", "env": "${env}", "feature": "${feature}", "createdBy": "terraform" }`, // pass tags for this service
-
-            '--auto-approve'
-          ],
-          cwd
+          cmd: 'rm',
+          args: ['output.cligenerated.json'],
+          cwd: globalResourcesCwd, 
+          shell: true
         },
+        {
+          cmd: 'rm',
+          args: ['backend.cligenerated.tf'],
+          cwd: globalResourcesCwd, 
+          shell: true
+        },
+      ]
+    );
+  }
+
+  if(isFeatureResourcesFolderExist) {
+    const featureResourcesCwd = `${process.cwd()}/deploy/terraform/feature-resources`;
+
+    createBackendFile({
+      awsConfiguration,
+      terraformBackendConfiguration,
+      folderName: 'feature-resources',
+      cwd: featureResourcesCwd,
+      env
+    })
+
+    await runCommands([
+      { 
+        cmd: 'terraform', 
+        args: ['workspace', 'select', '-or-create', feature],
+        cwd: featureResourcesCwd
+      },
+      { 
+        cmd: 'terraform',
+        args: ['init', '-reconfigure'], 
+        cwd: featureResourcesCwd
+      },
+      {
+        cmd: 'terraform',
+        args: [
+          'apply', 
+          '--var', `env=${env}`,
+          '--var', `feature=${feature}`,
+          '--var', `global_resources=${JSON.stringify(globalResourcesOutputs)}`,
+          '--var', `config=${JSON.stringify(config)}`,
+          '--var', `tags={ "service": "${serviceName}", "env": "${env}", "feature": "${feature}", "createdBy": "terraform" }`,
+          '--auto-approve'
+        ],
+        cwd: featureResourcesCwd
+      },
+      { 
+        cmd: 'terraform', 
+        args: ['output', '-json', '>', 'output.cligenerated.json'], 
+        cwd: featureResourcesCwd, 
+        shell: true 
+      }
+    ]);
+
+    const featureResourcesOutputsRawJson = readJsonFile(`${featureResourcesCwd}/output.cligenerated.json`) ?? {};
+    featureResourcesOutputs = normalizeTfOutputs(featureResourcesOutputsRawJson);
+
+    await runCommands(
+      [
         { 
           cmd: 'terraform', 
-          args: ['output', '-json', '>', 'output.json'], 
-          cwd, 
-          shell: true 
-        }
-      ]);
-  
-      const outputs = readJsonFile(`${cwd}/output.json`) ?? {};
-      
-      tfOutputs[outputName] = Object.entries(outputs).reduce((memo, [outputName, { value }]) => ({
-        ...memo,
-        [outputName]: value
-      }), {});
-  
-      await runCommands(
-        [
-          {
-            cmd: 'rm',
-            args: ['output.json'],
-            cwd, 
-            shell: true
-          },
-          { 
-            cmd: 'terraform', 
-            args: ['workspace', 'select', '-or-create', 'default'], 
-            cwd 
-          },
-        ]
-      );
-    }
+          args: ['workspace', 'select', '-or-create', 'default'], 
+          cwd: featureResourcesCwd 
+        },
+        {
+          cmd: 'rm',
+          args: ['output.cligenerated.json'],
+          cwd: featureResourcesCwd, 
+          shell: true
+        },
+        {
+          cmd: 'rm',
+          args: ['backend.cligenerated.tf'],
+          cwd: featureResourcesCwd, 
+          shell: true
+        },
+      ]
+    );
   }
 
-  await refreshConfig({ env, feature, tfOutputs });
+  const tfOutputs = {
+    globalResources: globalResourcesOutputs,
+    featureResources: featureResourcesOutputs,
+  };
 
-  // delete backend files
-  // await Promise.all(terraformResources.map(({ folderName }) => deleteFile(`./terraform/${folderName}/backend.tf`)));
+  await refreshConfig({ 
+    env, 
+    feature, 
+    tfOutputs
+  });
 
-  if(only === '' || only === 'deploy') {
-    await deploy({
-      env,
-      feature,
-      config,
-      AWS,
-      infrastructure: tfOutputs
-    });
-  }
+  await deploy({
+    env,
+    feature,
+    config,
+    AWS,
+    infrastructure: tfOutputs
+  });
 };
 
 module.exports = {
@@ -184,17 +244,12 @@ module.exports = {
       type: 'string',
       default: 'dev'
     },
+
     feature: {
       description: 'The feature to deploy',
       alias: 'f',
       type: 'string',
       default: 'master'
-    },
-    only: {
-      description: 'Run only infrastructure setup or deploy chain scripts',
-      alias: 'o',
-      type: 'string',
-      default: ''
     }
   },
   handler
