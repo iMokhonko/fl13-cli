@@ -91,14 +91,14 @@ const handler = async ({ env = 'dev', feature = 'master' } = {}) => {
 
     await runCommands([
       { 
-        cmd: 'terraform', 
-        args: ['workspace', 'select', '-or-create', 'default'], // for global resources workspace always 'default' 
-        cwd: globalResourcesCwd
-      },
-      { 
         cmd: 'terraform',
           args: ['init', '-reconfigure'], 
           cwd: globalResourcesCwd
+      },
+      { 
+        cmd: 'terraform', 
+        args: ['workspace', 'select', '-or-create', 'default'], // for global resources workspace always 'default' 
+        cwd: globalResourcesCwd
       },
       {
         cmd: 'terraform',
@@ -158,13 +158,13 @@ const handler = async ({ env = 'dev', feature = 'master' } = {}) => {
 
     await runCommands([
       { 
-        cmd: 'terraform', 
-        args: ['workspace', 'select', '-or-create', feature],
+        cmd: 'terraform',
+        args: ['init', '-reconfigure'], 
         cwd: featureResourcesCwd
       },
       { 
-        cmd: 'terraform',
-        args: ['init', '-reconfigure'], 
+        cmd: 'terraform', 
+        args: ['workspace', 'select', '-or-create', feature],
         cwd: featureResourcesCwd
       },
       {
