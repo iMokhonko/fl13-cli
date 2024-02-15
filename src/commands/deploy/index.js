@@ -64,8 +64,11 @@ const handler = async ({ env = 'dev', feature = 'master' } = {}) => {
     config = {},
     awsConfiguration = {},
     terraformBackendConfiguration = {},
+    preDeploy = () => {},
     deploy = () => {}
   } = require(`${process.cwd()}/deploy/index.js`);
+
+  await preDeploy();
 
   const [
     isGlobalResourcesFolderExist,
