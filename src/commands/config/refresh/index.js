@@ -4,43 +4,17 @@ const getEnvServices = require('../../../aws/getServices');
 const getTfOutputs = require('../../../terraform/getTfOutputs');
 
 const handler = async ({ env = 'dev', feature = 'master', tfOutputs = null } = {}) => {
-  const services = await getEnvServices(env);
-
-  let infrastructure = {};
-
   const {
-    terraformResources = [],
-    config = [],
-  } = require(`${process.cwd()}/terraform/index.js`);
-
-  // check if tfOutputs provided
-  if(tfOutputs) {
-    infrastructure = tfOutputs;
-  } else {
-    infrastructure = await getTfOutputs(terraformResources, { env, feature })
-  }
+    serviceName = '',
+    config = {},
+    envConfigMap = {}
+  } = require(`${process.cwd()}/deploy/index.js`);
 
   await Promise.all([
-    fs.writeFile('env.cligenerated.json', JSON.stringify({
-      __meta: {
-        config: {
-          ...config,
-          feature,
-          env
-        }
-      },
-      ...services,
-    }, null, 2)),
-    infrastructure && fs.writeFile('infrastructure.cligenerated.json', JSON.stringify({
-      __meta: {
-        config: {
-          ...config,
-          feature,
-          env
-        }
-      },
-      ...infrastructure
-    }, null, 2)),
+    fs.writeFile('config.cligenerated.json', JSON.stringify(envConfigMap?.[env] ?? {}, null, 2)),
+    fs.writeFile('env.cligenerated.json', JSON.stringify({ ...config, serviceName, env, feature }, null, 2)),
+    fs.writeFile('services.cligenerated.json', JSON.stringify(await getEnvServices(env), null, 2)),
+    fs.writeFile('infrastructure.cligenerated.json', JSON.stringify(tfOutputs ?? await getTfOutputs({ feature, env }), null, 2)),
   ]);
 
   console.log('Config refreshed');
