@@ -1,4 +1,3 @@
-const AWS = require('aws-sdk');
 const fs = require('fs').promises;
 
 const spawnCommand = require('../../helpers/spawnCommand');
@@ -232,7 +231,7 @@ const handler = async ({ env = 'dev', feature = 'master' } = {}) => {
     env,
     feature,
     config,
-    AWS,
+    // AWS,
     infrastructure: tfOutputs
   });
 };
