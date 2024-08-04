@@ -1,73 +1,149 @@
-const getTfOutputs = require('../../terraform/getTfOutputs');
+const fs = require('fs').promises;
+
 const runCommands = require('../../helpers/runCommands');
+const createFile = require('../../helpers/createFile');
 const readJsonFile = require("../../helpers/readJsonFile");
-const replaceTfVars = require("../../helpers/replaceTfVars");
-const generateTfArgsArrayOfVariables = require('../../helpers/generateTfArgsArrayOfVariables');
+const { handler: refreshConfig } = require('../config/refresh');
+
+const isFolderExist = async (path) => {
+  try {
+    await fs.access(path)
+
+    return true;
+  } catch(e) {
+    return false;
+  }
+}
+
+// create backend file based on configuration
+const createBackendFile = async ({ awsConfiguration, terraformBackendConfiguration, cwd, folderName, env }) => {
+  return createFile(`${cwd}/backend.cligenerated.tf`, `terraform {
+    required_providers {
+      aws = {
+        source  = "hashicorp/aws"
+        version = "~> 5.0"
+      }
+    }
+    
+    backend "s3" {
+      bucket = "${terraformBackendConfiguration.bucket}"
+      key    = "${terraformBackendConfiguration.serviceName}/${env}/${folderName}.tfstate"
+      region = "${terraformBackendConfiguration.region}"
+    }
+  }
+  
+  provider "aws" {
+    region = "${awsConfiguration.region}"
+    profile = "${awsConfiguration.profile}"
+  }
+        `);
+};
+
+const normalizeTfOutputs = (tfOutputs) => {
+  return Object.entries(tfOutputs).reduce((memo, [outputName, { value }]) => ({
+    ...memo,
+    [outputName]: value
+  }), {})
+};
 
 const handler = async ({ env = 'dev', feature = 'master' } = {}) => {  
   const {
-    terraformResources = []
-  } = readJsonFile(`./terraform/${env}/service.json`) ?? {};
+    serviceName = '',
+    config = {},
+    awsConfiguration = {},
+    terraformBackendConfiguration = {},
+  } = require(`${process.cwd()}/deploy/index.js`);
 
-  const resourcesTodestroy = feature === 'master'
-  ? terraformResources.reverse()
-  : terraformResources.filter(({ global = false }) => !global).reverse();
+  const [
+    isGlobalResourcesFolderExist,
+    isFeatureResourcesFolderExist,
+  ] = await Promise.all([
+    isFolderExist(`${process.cwd()}/deploy/terraform/global-resources`),
+    isFolderExist(`${process.cwd()}/deploy/terraform/feature-resources`)
+  ]);
 
-  const tfOutputs = await getTfOutputs(terraformResources, { env, feature });
+  await refreshConfig({ 
+    env, 
+    feature
+  });
 
-  while(resourcesTodestroy.length) {
-    const {
-      folderName, // tf directory path
-      variables = {},
-    } = resourcesTodestroy.shift();
+  if(isFeatureResourcesFolderExist) {
+    const featureResourcesCwd = `${process.cwd()}/deploy/terraform/feature-resources`;
 
-    const cwd = `./terraform/${env}/${folderName}`
-
-    const allVariables = {
-      ...variables,
-      ...(!global && { feature }),
+    createBackendFile({
+      awsConfiguration,
+      terraformBackendConfiguration,
+      folderName: 'feature-resources',
+      cwd: featureResourcesCwd,
       env
-    }
+    });
 
-    const replacedVars = replaceTfVars(allVariables, tfOutputs);
-    const spawnCommandString = generateTfArgsArrayOfVariables(replacedVars);
+    const globalResourcesOutputsRawJson = readJsonFile(`${process.cwd()}/infrastructure.cligenerated.json`) ?? {};
+    const { globalResources: globalResourcesOutputs } = globalResourcesOutputsRawJson;
+
+    console.log('globalResourcesOutputs', globalResourcesOutputs);
 
     await runCommands([
       { 
         cmd: 'terraform',
-         args: ['init', '-reconfigure'], 
-         cwd
+        args: ['init', '-reconfigure'], 
+        cwd: featureResourcesCwd
       },
       { 
         cmd: 'terraform', 
-        args: ['workspace', 'select', '-or-create', feature === 'master' ? 'default' : feature], 
-        cwd 
+        args: ['workspace', 'select', '-or-create', feature],
+        cwd: featureResourcesCwd
       },
       {
         cmd: 'terraform',
         args: [
           'destroy', 
-          ...spawnCommandString,
+          '--var', `env=${env}`,
+          '--var', `feature=${feature}`,
+          '--var', `global_resources=${JSON.stringify(globalResourcesOutputs)}`,
+          '--var', `config=${JSON.stringify(config)}`,
+          '--var', `tags={ "service": "${serviceName}", "env": "${env}", "feature": "${feature}", "createdBy": "terraform" }`,
           '--auto-approve'
         ],
-        cwd
+        cwd: featureResourcesCwd
+      }
+    ]);
+  }
+
+  if(isGlobalResourcesFolderExist) {
+    const globalResourcesCwd = `./deploy/terraform/global-resources`;
+
+    await createBackendFile({
+      awsConfiguration,
+      terraformBackendConfiguration,
+      folderName: 'global-resources',
+      cwd: globalResourcesCwd,
+      env
+    })
+
+    await runCommands([
+      { 
+        cmd: 'terraform',
+          args: ['init', '-reconfigure'], 
+          cwd: globalResourcesCwd
       },
       { 
         cmd: 'terraform', 
-        args: ['workspace', 'select', '-or-create', 'default'], 
-        cwd 
+        args: ['workspace', 'select', '-or-create', 'default'], // for global resources workspace always 'default' 
+        cwd: globalResourcesCwd
       },
+      {
+        cmd: 'terraform',
+        args: [
+          'destroy', 
+          '--var', `env=${env}`, // pass env variable
+          '--var', `config=${JSON.stringify(config)}`, // pass config as variable
+          '--var', `tags={ "service": "${serviceName}", "env": "${env}", "isGlobalResource": true, "createdBy": "terraform" }`, // pass tags for this service
+          '--auto-approve'
+        ],
+        cwd: globalResourcesCwd
+      }
     ]);
-
-    if(feature !== 'master') {
-      await runCommands([
-        { 
-          cmd: 'terraform', 
-          args: ['workspace', 'delete', feature], 
-          cwd 
-        }
-      ])
-    }
   }
 };
 
